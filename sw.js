@@ -1,6 +1,6 @@
 self.addEventListener("install",e=>{
   e.waitUntil(
-    caches.open("azhur-v5").then(c=>
+    caches.open("azhur-v6").then(c=>
       c.addAll([
         "./",
         "./index.html",
