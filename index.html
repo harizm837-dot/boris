@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="mn">
+<head>
+<meta charset="UTF-8">
+<title>АЗХУР</title>
+
+<meta name="viewport"
+content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#000000">
+
+<style>
+:root{--text:#eaffff}
+*{margin:0;padding:0;box-sizing:border-box;font-family:system-ui}
+html,body{height:100%}
+
+body{
+  background:radial-gradient(circle at top,#2b1055,#000);
+  overflow:hidden;
+  color:var(--text);
+  touch-action:none;
+  user-select:none;
+}
+
+#score{
+  position:fixed;
+  top:env(safe-area-inset-top,14px);
+  left:50%;
+  transform:translateX(-50%);
+  font-size:22px;
+  z-index:10;
+}
+
+.screen{
+  position:fixed;
+  inset:0;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  align-items:center;
+  background:linear-gradient(180deg,rgba(0,0,0,.45),rgba(0,0,0,.95));
+  backdrop-filter:blur(6px);
+  z-index:20;
+  text-align:center;
+}
+.hidden{display:none}
+
+h1{
+  font-size:48px;
+  letter-spacing:6px;
+  background:linear-gradient(90deg,#00ffd5,#ffd700,#ff4d6d);
+  -webkit-background-clip:text;
+  color:transparent;
+}
+
+button{
+  margin-top:22px;
+  padding:14px 36px;
+  border:none;
+  border-radius:36px;
+  font-size:16px;
+  font-weight:700;
+  background:linear-gradient(90deg,#00ffd5,#ffd700);
+  color:#001;
+  box-shadow:0 0 30px rgba(0,255,213,.6);
+}
+button:active{transform:scale(.95)}
+
+.toggle{
+  margin-top:12px;
+  opacity:.85;
+  font-size:14px;
+}
+
+canvas{display:block}
+</style>
+</head>
+
+<body>
+
+<div id="score">0</div>
+
+<!-- START -->
+<div id="start" class="screen">
+  <h1>АЗХУР</h1>
+  <p>Нэг товшилт · Нэг амь</p>
+  <div class="toggle">
+    🔊 Sound:
+    <span onclick="toggleSound()" style="text-decoration:underline;cursor:pointer">
+      <span id="soundState">ON</span>
+    </span>
+  </div>
+  <button onclick="openTutorial()">ЭХЛЭХ</button>
+</div>
+
+<!-- TUTORIAL -->
+<div id="tutorial" class="screen hidden">
+  <h1>ЗААВАР</h1>
+  <p>👆 Нэг товш → чиг солигдоно</p>
+  <p>🎨 Өнгө солигдоно</p>
+  <p>✌️ 2 хуруу → Pause</p>
+  <p>🚫 Мөргөлдвөл дуусна</p>
+  <button onclick="startGame()">ТОГЛОЁ</button>
+</div>
+
+<!-- PAUSE -->
+<div id="pause" class="screen hidden">
+  <h1>PAUSE</h1>
+  <button onclick="resume()">ҮРГЭЛЖЛҮҮЛЭХ</button>
+</div>
+
+<!-- GAME OVER -->
+<div id="over" class="screen hidden">
+  <h1>ТӨГСӨВ</h1>
+  <p id="final"></p>
+  <p id="best"></p>
+  <button onclick="restart()">ДАХИН</button>
+</div>
+
+<canvas id="game"></canvas>
+
+<script>
+/* ---------- Canvas ---------- */
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+resize();addEventListener("resize",resize);
+function resize(){canvas.width=innerWidth;canvas.height=innerHeight}
+
+/* ---------- Sound ---------- */
+let soundOn=JSON.parse(localStorage.getItem("az_sound") ?? "true");
+document.getElementById("soundState").textContent=soundOn?"ON":"OFF";
+
+const AudioCtx=window.AudioContext||window.webkitAudioContext;
+const actx=new AudioCtx();
+
+function beep(freq=500,d=0.08){
+  if(!soundOn)return;
+  const o=actx.createOscillator();
+  const g=actx.createGain();
+  o.frequency.value=freq;
+  o.connect(g);g.connect(actx.destination);
+  g.gain.value=0.12;
+  o.start();o.stop(actx.currentTime+d);
+}
+
+function toggleSound(){
+  soundOn=!soundOn;
+  localStorage.setItem("az_sound",soundOn);
+  document.getElementById("soundState").textContent=soundOn?"ON":"OFF";
+  beep(700,0.05);
+}
+
+/* ---------- Game Data ---------- */
+const colors=["#00ffd5","#ffd700","#ff4d6d","#4dabff","#c77dff"];
+let player,obs,parts,score,speed,alive,paused,timer;
+
+/* ---------- Screens ---------- */
+function openTutorial(){
+  document.getElementById("start").classList.add("hidden");
+  document.getElementById("tutorial").classList.remove("hidden");
+}
+
+/* ---------- Init ---------- */
+function init(){
+  player={x:canvas.width/2,y:canvas.height-120,r:16,dir:1,color:0};
+  obs=[];parts=[];
+  score=0;
+  speed=3;
+  alive=true;
+  paused=false;
+}
+
+/* ---------- Start ---------- */
+function startGame(){
+  document.getElementById("tutorial").classList.add("hidden");
+  init();
+  timer=setInterval(spawn,550);
+  loop();
+  beep(600,0.1);
+}
+
+/* ---------- Controls ---------- */
+let pointers=new Set();
+
+addEventListener("pointerdown",e=>{
+  pointers.add(e.pointerId);
+  if(!alive||paused)return;
+
+  if(pointers.size>=2){pause();return;}
+
+  player.dir*=-1;
+  player.color=(player.color+1)%colors.length;
+  burst(player.x,player.y);
+  beep(500);
+  navigator.vibrate?.(12);
+});
+
+addEventListener("pointerup",e=>pointers.delete(e.pointerId));
+addEventListener("pointercancel",e=>pointers.delete(e.pointerId));
+
+/* ---------- Spawn ---------- */
+function spawn(){
+  if(paused)return;
+  obs.push({
+    x:Math.random()*canvas.width,
+    y:-30,
+    r:14,
+    c:colors[Math.random()*colors.length|0]
+  });
+}
+
+/* ---------- FX ---------- */
+function burst(x,y){
+  for(let i=0;i<14;i++){
+    parts.push({
+      x,y,
+      vx:(Math.random()-.5)*6,
+      vy:(Math.random()-.5)*6,
+      life:30,
+      c:colors[Math.random()*colors.length|0]
+    });
+  }
+}
+
+/* ---------- Loop ---------- */
+function loop(){
+  if(!alive)return;
+  if(paused){requestAnimationFrame(loop);return;}
+
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  player.x+=player.dir*4.5;
+  if(player.x<player.r||player.x>canvas.width-player.r)player.dir*=-1;
+
+  ctx.beginPath();
+  ctx.arc(player.x,player.y,player.r,0,Math.PI*2);
+  ctx.fillStyle=colors[player.color];
+  ctx.shadowBlur=25;
+  ctx.shadowColor=colors[player.color];
+  ctx.fill();
+  ctx.shadowBlur=0;
+
+  for(let o of obs){
+    o.y+=speed;
+    ctx.beginPath();
+    ctx.arc(o.x,o.y,o.r,0,Math.PI*2);
+    ctx.fillStyle=o.c;
+    ctx.fill();
+
+    if(Math.hypot(o.x-player.x,o.y-player.y)<o.r+player.r){
+      end();return;
+    }
+  }
+  obs=obs.filter(o=>o.y<canvas.height+40);
+
+  for(let p of parts){
+    p.x+=p.vx;p.y+=p.vy;p.life--;
+    ctx.fillStyle=p.c;
+    ctx.fillRect(p.x,p.y,3,3);
+  }
+  parts=parts.filter(p=>p.life>0);
+
+  score++;
+  speed+=0.0008;
+  document.getElementById("score").textContent=score;
+
+  requestAnimationFrame(loop);
+}
+
+/* ---------- Pause ---------- */
+function pause(){
+  if(paused||!alive)return;
+  paused=true;
+  document.getElementById("pause").classList.remove("hidden");
+  beep(300,0.1);
+}
+function resume(){
+  paused=false;
+  document.getElementById("pause").classList.add("hidden");
+  beep(650,0.08);
+}
+addEventListener("visibilitychange",()=>{
+  if(document.hidden && alive && !paused)pause();
+});
+
+/* ---------- End ---------- */
+function end(){
+  alive=false;
+  clearInterval(timer);
+  beep(160,0.3);
+  navigator.vibrate?.([60,40,60]);
+
+  let best=+localStorage.getItem("az_best")||0;
+  if(score>best){best=score;localStorage.setItem("az_best",best);}
+
+  document.getElementById("final").textContent="Оноо: "+score;
+  document.getElementById("best").textContent="Шилдэг: "+best;
+  document.getElementById("over").classList.remove("hidden");
+}
+
+/* ---------- Restart ---------- */
+function restart(){
+  document.getElementById("over").classList.add("hidden");
+  document.getElementById("start").classList.remove("hidden");
+}
+</script>
+
+</body>
+</html>
